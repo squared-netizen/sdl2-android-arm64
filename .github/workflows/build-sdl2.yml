@@ -1,0 +1,130 @@
+name: Build SDL2 Android ARM64
+
+'on':
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-sdl2.yml
+
+permissions:
+  contents: read
+
+env:
+  SDL_VERSION: 2.32.10
+  SDL_REF: release-2.32.10
+  NDK_VERSION: 27.0.12077973
+  ANDROID_ABI: arm64-v8a
+  ANDROID_API: 30
+  OUTPUT_NAME: SDL2-2.32.10-android-arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Install pinned Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;${NDK_VERSION}"
+
+      - name: Fetch pinned SDL2 tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone \
+            --branch "${SDL_REF}" \
+            --depth 1 \
+            https://github.com/libsdl-org/SDL.git \
+            SDL
+          git -C SDL rev-parse HEAD
+          test "$(git -C SDL describe --tags --exact-match)" = "${SDL_REF}"
+
+      - name: Configure SDL2 for Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          test -f "${NDK_ROOT}/build/cmake/android.toolchain.cmake"
+
+          cmake \
+            -S SDL \
+            -B build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF \
+            -DSDL_TESTS=OFF
+
+      - name: Build SDL2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel 2 --verbose
+
+      - name: Assemble dependency bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDL_LIBRARY="$(find build -type f -name libSDL2.so -print -quit)"
+          test -n "${SDL_LIBRARY}"
+
+          STAGE="dist/${OUTPUT_NAME}"
+          mkdir -p \
+            "${STAGE}/include/SDL2" \
+            "${STAGE}/java" \
+            "${STAGE}/lib/${ANDROID_ABI}"
+
+          cp "${SDL_LIBRARY}" "${STAGE}/lib/${ANDROID_ABI}/libSDL2.so"
+          cp SDL/include/*.h "${STAGE}/include/SDL2/"
+          cp -R SDL/android-project/app/src/main/java/org "${STAGE}/java/"
+          cp SDL/LICENSE.txt "${STAGE}/LICENSE.txt"
+
+          {
+            echo "SDL_VERSION=${SDL_VERSION}"
+            echo "SDL_REF=${SDL_REF}"
+            echo "SDL_COMMIT=$(git -C SDL rev-parse HEAD)"
+            echo "NDK_VERSION=${NDK_VERSION}"
+            echo "ANDROID_ABI=${ANDROID_ABI}"
+            echo "ANDROID_API=${ANDROID_API}"
+            echo "RUNNER_OS=${RUNNER_OS}"
+            echo "RUNNER_ARCH=${RUNNER_ARCH}"
+            cmake --version | head -n 1
+            ninja --version | sed 's/^/NINJA_VERSION=/'
+          } > "${STAGE}/BUILD-INFO.txt"
+
+          readelf -h "${STAGE}/lib/${ANDROID_ABI}/libSDL2.so" \
+            | tee "${STAGE}/ELF-HEADER.txt"
+          readelf -h "${STAGE}/lib/${ANDROID_ABI}/libSDL2.so" \
+            | grep -q 'Machine:.*AArch64'
+
+          readelf -d "${STAGE}/lib/${ANDROID_ABI}/libSDL2.so" \
+            | tee "${STAGE}/ELF-DYNAMIC.txt"
+
+          test -f "${STAGE}/include/SDL2/SDL.h"
+          test -f "${STAGE}/java/org/libsdl/app/SDLActivity.java"
+          test -f "${STAGE}/lib/${ANDROID_ABI}/libSDL2.so"
+
+          (
+            cd dist
+            zip -q -r "../${OUTPUT_NAME}.zip" "${OUTPUT_NAME}"
+          )
+          sha256sum "${OUTPUT_NAME}.zip" > "${OUTPUT_NAME}.zip.sha256"
+
+      - name: Upload verified bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdl2-android-arm64
+          path: |
+            SDL2-2.32.10-android-arm64.zip
+            SDL2-2.32.10-android-arm64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

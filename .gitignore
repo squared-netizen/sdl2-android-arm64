@@ -1,0 +1,7 @@
+build/
+dist/
+SDL/
+*.zip
+*.sha256
+
+.si.json
