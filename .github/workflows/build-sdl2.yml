@@ -25,12 +25,10 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Install pinned Android NDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager "ndk;${NDK_VERSION}"
-
+      - name: Set up Android SDK and pinned NDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "ndk;27.0.12077973"
       - name: Fetch pinned SDL2 tag
         shell: bash
         run: |
