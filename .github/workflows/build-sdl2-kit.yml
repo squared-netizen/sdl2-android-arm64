@@ -19,10 +19,12 @@ env:
   TTF_REF: release-2.24.0
   MIXER_VERSION: 2.8.2
   MIXER_REF: release-2.8.2
+  IMAGE_VERSION: 2.8.12
+  IMAGE_REF: release-2.8.12
   NDK_VERSION: 27.0.12077973
   ANDROID_ABI: arm64-v8a
   ANDROID_API: 30
-  OUTPUT_NAME: SDL2-2.32.10-TTF-2.24.0-MIXER-2.8.2-android-arm64
+  OUTPUT_NAME: SDL2-2.32.10-TTF-2.24.0-MIXER-2.8.2-IMAGE-2.8.12-android-arm64
 
 jobs:
   build:
@@ -63,13 +65,21 @@ jobs:
             https://github.com/libsdl-org/SDL_mixer.git \
             SDL_mixer
 
+          git clone \
+            --branch "${IMAGE_REF}" \
+            --depth 1 \
+            https://github.com/libsdl-org/SDL_image.git \
+            SDL_image
+
           test "$(git -C SDL describe --tags --exact-match)" = "${SDL_REF}"
           test "$(git -C SDL_ttf describe --tags --exact-match)" = "${TTF_REF}"
           test "$(git -C SDL_mixer describe --tags --exact-match)" = "${MIXER_REF}"
+          test "$(git -C SDL_image describe --tags --exact-match)" = "${IMAGE_REF}"
 
           git -C SDL rev-parse HEAD
           git -C SDL_ttf rev-parse HEAD
           git -C SDL_mixer rev-parse HEAD
+          git -C SDL_image rev-parse HEAD
           git -C SDL_ttf submodule status --recursive
 
       - name: Configure SDL2
@@ -218,6 +228,74 @@ jobs:
             --parallel 2 \
             --verbose
 
+      - name: Configure SDL2_image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          SDL2_CONFIG="$(
+            find "${GITHUB_WORKSPACE}/sdl-prefix" \
+              -type f \
+              -name SDL2Config.cmake \
+              -print \
+              -quit
+          )"
+
+          test -n "${SDL2_CONFIG}"
+
+          SDL2_CONFIG_DIR="$(dirname "${SDL2_CONFIG}")"
+
+          cmake \
+            -S SDL_image \
+            -B build-image \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/sdl-prefix" \
+            -DSDL2_DIR="${SDL2_CONFIG_DIR}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSDL2IMAGE_VENDORED=ON \
+            -DSDL2IMAGE_DEPS_SHARED=OFF \
+            -DSDL2IMAGE_STRICT=ON \
+            -DSDL2IMAGE_BACKEND_STB=ON \
+            -DSDL2IMAGE_AVIF=OFF \
+            -DSDL2IMAGE_BMP=ON \
+            -DSDL2IMAGE_GIF=OFF \
+            -DSDL2IMAGE_JPG=ON \
+            -DSDL2IMAGE_JPG_SAVE=OFF \
+            -DSDL2IMAGE_JXL=OFF \
+            -DSDL2IMAGE_LBM=OFF \
+            -DSDL2IMAGE_PCX=OFF \
+            -DSDL2IMAGE_PNG=ON \
+            -DSDL2IMAGE_PNG_SAVE=OFF \
+            -DSDL2IMAGE_PNM=OFF \
+            -DSDL2IMAGE_QOI=ON \
+            -DSDL2IMAGE_SVG=OFF \
+            -DSDL2IMAGE_TGA=OFF \
+            -DSDL2IMAGE_TIF=OFF \
+            -DSDL2IMAGE_WEBP=OFF \
+            -DSDL2IMAGE_XCF=OFF \
+            -DSDL2IMAGE_XPM=OFF \
+            -DSDL2IMAGE_XV=OFF \
+            -DSDL2IMAGE_SAMPLES=OFF \
+            -DSDL2IMAGE_TESTS=OFF \
+            -DSDL2IMAGE_INSTALL=OFF
+
+      - name: Build SDL2_image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            --build build-image \
+            --parallel 2 \
+            --verbose
+
       - name: Assemble staged kit
         shell: bash
         run: |
@@ -247,9 +325,18 @@ jobs:
               -quit
           )"
 
+          IMAGE_LIBRARY="$(
+            find build-image \
+              -type f \
+              -name libSDL2_image.so \
+              -print \
+              -quit
+          )"
+
           test -n "${SDL_LIBRARY}"
           test -n "${TTF_LIBRARY}"
           test -n "${MIXER_LIBRARY}"
+          test -n "${IMAGE_LIBRARY}"
 
           STAGE="dist/${OUTPUT_NAME}"
 
@@ -259,7 +346,8 @@ jobs:
             "${STAGE}/lib/${ANDROID_ABI}" \
             "${STAGE}/licenses" \
             "${STAGE}/tests/core-capability" \
-            "${STAGE}/tests/ttf-capability"
+            "${STAGE}/tests/ttf-capability" \
+            "${STAGE}/tests/mixer-capability"
 
           cp \
             "${SDL_LIBRARY}" \
@@ -273,6 +361,10 @@ jobs:
             "${MIXER_LIBRARY}" \
             "${STAGE}/lib/${ANDROID_ABI}/libSDL2_mixer.so"
 
+          cp \
+            "${IMAGE_LIBRARY}" \
+            "${STAGE}/lib/${ANDROID_ABI}/libSDL2_image.so"
+
           cp SDL/include/*.h \
             "${STAGE}/include/SDL2/"
 
@@ -280,6 +372,9 @@ jobs:
             "${STAGE}/include/SDL2/"
 
           cp SDL_mixer/include/SDL_mixer.h \
+            "${STAGE}/include/SDL2/"
+
+          cp SDL_image/include/SDL_image.h \
             "${STAGE}/include/SDL2/"
 
           cp -R \
@@ -301,11 +396,17 @@ jobs:
           cp SDL_mixer/LICENSE.txt \
             "${STAGE}/licenses/SDL2_mixer-LICENSE.txt"
 
+          cp SDL_image/LICENSE.txt \
+            "${STAGE}/licenses/SDL2_image-LICENSE.txt"
+
           cp tests/core-capability/main.cpp \
             "${STAGE}/tests/core-capability/main.cpp"
 
           cp tests/ttf-capability/main.cpp \
             "${STAGE}/tests/ttf-capability/main.cpp"
+
+          cp -R tests/mixer-capability/. \
+            "${STAGE}/tests/mixer-capability/"
 
           {
             echo "SDL_VERSION=${SDL_VERSION}"
@@ -329,6 +430,15 @@ jobs:
             echo "MIXER_MOD=OFF"
             echo "MIXER_OPUS=OFF"
             echo "MIXER_WAVPACK=OFF"
+            echo "IMAGE_VERSION=${IMAGE_VERSION}"
+            echo "IMAGE_REF=${IMAGE_REF}"
+            echo "IMAGE_COMMIT=$(git -C SDL_image rev-parse HEAD)"
+            echo "IMAGE_BACKEND_STB=ON"
+            echo "IMAGE_BMP=ON"
+            echo "IMAGE_JPG=ON"
+            echo "IMAGE_PNG=ON"
+            echo "IMAGE_QOI=ON"
+            echo "IMAGE_OTHER_FORMATS=OFF"
             echo "NDK_VERSION=${NDK_VERSION}"
             echo "ANDROID_ABI=${ANDROID_ABI}"
             echo "ANDROID_API=${ANDROID_API}"
@@ -357,6 +467,12 @@ jobs:
             echo "- MP3 through the built-in minimp3 decoder"
             echo "- no external codec shared libraries"
             echo "- FLAC, MIDI, MOD, Opus, and WavPack disabled"
+            echo
+            echo "SDL2_image:"
+            echo "- PNG and JPEG through the embedded STB backend"
+            echo "- built-in BMP and QOI loading"
+            echo "- no external image codec shared libraries"
+            echo "- other image formats disabled"
           } > "${STAGE}/FEATURES.txt"
 
       - name: Verify staged libraries
@@ -370,7 +486,8 @@ jobs:
           for LIBRARY in \
             "${LIB_DIR}/libSDL2.so" \
             "${LIB_DIR}/libSDL2_ttf.so" \
-            "${LIB_DIR}/libSDL2_mixer.so"
+            "${LIB_DIR}/libSDL2_mixer.so" \
+            "${LIB_DIR}/libSDL2_image.so"
           do
             test -f "${LIBRARY}"
 
@@ -414,12 +531,38 @@ jobs:
             'Mix_OpenAudio' \
             "${STAGE}/libSDL2_mixer-ELF-SYMBOLS.txt"
 
+          readelf -d "${LIB_DIR}/libSDL2_image.so" \
+            | grep -Fq 'Shared library: [libSDL2.so]'
+
+          if readelf -d "${LIB_DIR}/libSDL2_image.so" \
+            | grep -Eq \
+              'Shared library: \[lib(png|jpeg|turbojpeg|z|webp|tiff|avif|jxl)\.so'
+          then
+            echo "ERROR: SDL2_image has an external codec dependency" >&2
+            exit 1
+          fi
+
+          readelf -Ws "${LIB_DIR}/libSDL2_image.so" \
+            | tee "${STAGE}/libSDL2_image-ELF-SYMBOLS.txt"
+
+          grep -Fq \
+            'IMG_Load' \
+            "${STAGE}/libSDL2_image-ELF-SYMBOLS.txt"
+
           test -f "${STAGE}/include/SDL2/SDL.h"
           test -f "${STAGE}/include/SDL2/SDL_ttf.h"
           test -f "${STAGE}/include/SDL2/SDL_mixer.h"
+          test -f "${STAGE}/include/SDL2/SDL_image.h"
           test -f "${STAGE}/java/org/libsdl/app/SDLActivity.java"
           test -f "${STAGE}/tests/core-capability/main.cpp"
           test -f "${STAGE}/tests/ttf-capability/main.cpp"
+          test -f "${STAGE}/tests/mixer-capability/main.cpp"
+          test -f "${STAGE}/tests/mixer-capability/SHA256SUMS.txt"
+
+          (
+            cd "${STAGE}/tests/mixer-capability"
+            sha256sum -c SHA256SUMS.txt
+          )
 
       - name: Create checksummed archive
         shell: bash
