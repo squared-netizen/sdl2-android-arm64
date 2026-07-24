@@ -1,0 +1,317 @@
+name: Build SDL2 Android ARM64 Kit
+
+'on':
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-sdl2-kit.yml
+
+permissions:
+  contents: read
+
+env:
+  SDL_VERSION: 2.32.10
+  SDL_REF: release-2.32.10
+  TTF_VERSION: 2.24.0
+  TTF_REF: release-2.24.0
+  NDK_VERSION: 27.0.12077973
+  ANDROID_ABI: arm64-v8a
+  ANDROID_API: 30
+  OUTPUT_NAME: SDL2-2.32.10-TTF-2.24.0-android-arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out builder
+        uses: actions/checkout@v5
+
+      - name: Set up Android SDK and pinned NDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "ndk;27.0.12077973"
+
+      - name: Fetch pinned SDL2 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone \
+            --branch "${SDL_REF}" \
+            --depth 1 \
+            https://github.com/libsdl-org/SDL.git \
+            SDL
+
+          git clone \
+            --branch "${TTF_REF}" \
+            --depth 1 \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/libsdl-org/SDL_ttf.git \
+            SDL_ttf
+
+          test "$(git -C SDL describe --tags --exact-match)" = "${SDL_REF}"
+          test "$(git -C SDL_ttf describe --tags --exact-match)" = "${TTF_REF}"
+
+          git -C SDL rev-parse HEAD
+          git -C SDL_ttf rev-parse HEAD
+          git -C SDL_ttf submodule status --recursive
+
+      - name: Configure SDL2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          test -f \
+            "${NDK_ROOT}/build/cmake/android.toolchain.cmake"
+
+          cmake \
+            -S SDL \
+            -B build-sdl \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF \
+            -DSDL_TESTS=OFF \
+            -DSDL_INSTALL=ON
+
+      - name: Build and install SDL2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            --build build-sdl \
+            --parallel 2 \
+            --verbose
+
+          cmake \
+            --install build-sdl \
+            --prefix "${GITHUB_WORKSPACE}/sdl-prefix"
+
+          find "${GITHUB_WORKSPACE}/sdl-prefix" \
+            -type f \
+            -print
+
+      - name: Configure SDL2_ttf
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          SDL2_CONFIG="$(
+            find "${GITHUB_WORKSPACE}/sdl-prefix" \
+              -type f \
+              -name SDL2Config.cmake \
+              -print \
+              -quit
+          )"
+
+          test -n "${SDL2_CONFIG}"
+
+          SDL2_CONFIG_DIR="$(dirname "${SDL2_CONFIG}")"
+
+          cmake \
+            -S SDL_ttf \
+            -B build-ttf \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/sdl-prefix" \
+            -DSDL2_DIR="${SDL2_CONFIG_DIR}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSDL2TTF_VENDORED=ON \
+            -DSDL2TTF_HARFBUZZ=OFF \
+            -DSDL2TTF_SAMPLES=OFF \
+            -DSDL2TTF_INSTALL=OFF
+
+      - name: Build SDL2_ttf
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            --build build-ttf \
+            --parallel 2 \
+            --verbose
+
+      - name: Assemble staged kit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDL_LIBRARY="$(
+            find build-sdl \
+              -type f \
+              -name libSDL2.so \
+              -print \
+              -quit
+          )"
+
+          TTF_LIBRARY="$(
+            find build-ttf \
+              -type f \
+              -name libSDL2_ttf.so \
+              -print \
+              -quit
+          )"
+
+          test -n "${SDL_LIBRARY}"
+          test -n "${TTF_LIBRARY}"
+
+          STAGE="dist/${OUTPUT_NAME}"
+
+          mkdir -p \
+            "${STAGE}/include/SDL2" \
+            "${STAGE}/java" \
+            "${STAGE}/lib/${ANDROID_ABI}" \
+            "${STAGE}/licenses" \
+            "${STAGE}/tests/core-capability"
+
+          cp \
+            "${SDL_LIBRARY}" \
+            "${STAGE}/lib/${ANDROID_ABI}/libSDL2.so"
+
+          cp \
+            "${TTF_LIBRARY}" \
+            "${STAGE}/lib/${ANDROID_ABI}/libSDL2_ttf.so"
+
+          cp SDL/include/*.h \
+            "${STAGE}/include/SDL2/"
+
+          cp SDL_ttf/SDL_ttf.h \
+            "${STAGE}/include/SDL2/"
+
+          cp -R \
+            SDL/android-project/app/src/main/java/org \
+            "${STAGE}/java/"
+
+          cp SDL/LICENSE.txt \
+            "${STAGE}/licenses/SDL2-LICENSE.txt"
+
+          cp SDL_ttf/LICENSE.txt \
+            "${STAGE}/licenses/SDL2_ttf-LICENSE.txt"
+
+          cp SDL_ttf/external/freetype/LICENSE.TXT \
+            "${STAGE}/licenses/FreeType-LICENSE.txt"
+
+          cp SDL_ttf/external/freetype/docs/FTL.TXT \
+            "${STAGE}/licenses/FreeType-FTL.txt"
+
+          cp tests/core-capability/main.cpp \
+            "${STAGE}/tests/core-capability/main.cpp"
+
+          {
+            echo "SDL_VERSION=${SDL_VERSION}"
+            echo "SDL_REF=${SDL_REF}"
+            echo "SDL_COMMIT=$(git -C SDL rev-parse HEAD)"
+            echo "TTF_VERSION=${TTF_VERSION}"
+            echo "TTF_REF=${TTF_REF}"
+            echo "TTF_COMMIT=$(git -C SDL_ttf rev-parse HEAD)"
+            echo "FREETYPE_COMMIT=$(git -C SDL_ttf/external/freetype rev-parse HEAD)"
+            echo "TTF_HARFBUZZ=OFF"
+            echo "TTF_VENDORED_FREETYPE=ON"
+            echo "NDK_VERSION=${NDK_VERSION}"
+            echo "ANDROID_ABI=${ANDROID_ABI}"
+            echo "ANDROID_API=${ANDROID_API}"
+            echo "RUNNER_OS=${RUNNER_OS}"
+            echo "RUNNER_ARCH=${RUNNER_ARCH}"
+            cmake --version | head -n 1
+            ninja --version | sed 's/^/NINJA_VERSION=/'
+          } > "${STAGE}/BUILD-INFO.txt"
+
+          {
+            echo "SDL2 core:"
+            echo "- video and rendering"
+            echo "- touch and multitouch"
+            echo "- audio"
+            echo "- text input"
+            echo "- Android lifecycle"
+            echo
+            echo "SDL2_ttf:"
+            echo "- TrueType and OpenType rendering"
+            echo "- vendored static FreeType"
+            echo "- HarfBuzz disabled"
+          } > "${STAGE}/FEATURES.txt"
+
+      - name: Verify staged libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STAGE="dist/${OUTPUT_NAME}"
+          LIB_DIR="${STAGE}/lib/${ANDROID_ABI}"
+
+          for LIBRARY in \
+            "${LIB_DIR}/libSDL2.so" \
+            "${LIB_DIR}/libSDL2_ttf.so"
+          do
+            test -f "${LIBRARY}"
+
+            BASE_NAME="$(basename "${LIBRARY}" .so)"
+
+            readelf -h "${LIBRARY}" \
+              | tee "${STAGE}/${BASE_NAME}-ELF-HEADER.txt"
+
+            readelf -h "${LIBRARY}" \
+              | grep -q 'Machine:.*AArch64'
+
+            readelf -d "${LIBRARY}" \
+              | tee "${STAGE}/${BASE_NAME}-ELF-DYNAMIC.txt"
+          done
+
+          readelf -d "${LIB_DIR}/libSDL2_ttf.so" \
+            | grep -Fq 'Shared library: [libSDL2.so]'
+
+          if readelf -d "${LIB_DIR}/libSDL2_ttf.so" \
+            | grep -Fq 'libfreetype.so'
+          then
+            echo "ERROR: FreeType was not folded into libSDL2_ttf.so" >&2
+            exit 1
+          fi
+
+          test -f "${STAGE}/include/SDL2/SDL.h"
+          test -f "${STAGE}/include/SDL2/SDL_ttf.h"
+          test -f "${STAGE}/java/org/libsdl/app/SDLActivity.java"
+          test -f "${STAGE}/tests/core-capability/main.cpp"
+
+      - name: Create checksummed archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          (
+            cd dist
+            zip -q -r "../${OUTPUT_NAME}.zip" "${OUTPUT_NAME}"
+          )
+
+          sha256sum \
+            "${OUTPUT_NAME}.zip" \
+            > "${OUTPUT_NAME}.zip.sha256"
+
+          sha256sum \
+            -c "${OUTPUT_NAME}.zip.sha256"
+
+      - name: Upload verified staged kit
+        uses: actions/upload-artifact@v6
+        with:
+          name: sdl2-kit-android-arm64
+          path: |
+            ${{ env.OUTPUT_NAME }}.zip
+            ${{ env.OUTPUT_NAME }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
