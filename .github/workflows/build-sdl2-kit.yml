@@ -279,7 +279,7 @@ jobs:
           cp SDL_ttf/SDL_ttf.h \
             "${STAGE}/include/SDL2/"
 
-          cp SDL_mixer/include/SDL2/SDL_mixer.h \
+          cp SDL_mixer/include/SDL_mixer.h \
             "${STAGE}/include/SDL2/"
 
           cp -R \
