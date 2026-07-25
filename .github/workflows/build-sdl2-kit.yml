@@ -21,10 +21,12 @@ env:
   MIXER_REF: release-2.8.2
   IMAGE_VERSION: 2.8.12
   IMAGE_REF: release-2.8.12
+  NET_VERSION: 2.4.0
+  NET_REF: release-2.4.0
   NDK_VERSION: 27.0.12077973
   ANDROID_ABI: arm64-v8a
   ANDROID_API: 30
-  OUTPUT_NAME: SDL2-2.32.10-TTF-2.24.0-MIXER-2.8.2-IMAGE-2.8.12-android-arm64
+  OUTPUT_NAME: SDL2-2.32.10-TTF-2.24.0-MIXER-2.8.2-IMAGE-2.8.12-NET-2.4.0-android-arm64
 
 jobs:
   build:
@@ -71,15 +73,23 @@ jobs:
             https://github.com/libsdl-org/SDL_image.git \
             SDL_image
 
+          git clone \
+            --branch "${NET_REF}" \
+            --depth 1 \
+            https://github.com/libsdl-org/SDL_net.git \
+            SDL_net
+
           test "$(git -C SDL describe --tags --exact-match)" = "${SDL_REF}"
           test "$(git -C SDL_ttf describe --tags --exact-match)" = "${TTF_REF}"
           test "$(git -C SDL_mixer describe --tags --exact-match)" = "${MIXER_REF}"
           test "$(git -C SDL_image describe --tags --exact-match)" = "${IMAGE_REF}"
+          test "$(git -C SDL_net describe --tags --exact-match)" = "${NET_REF}"
 
           git -C SDL rev-parse HEAD
           git -C SDL_ttf rev-parse HEAD
           git -C SDL_mixer rev-parse HEAD
           git -C SDL_image rev-parse HEAD
+          git -C SDL_net rev-parse HEAD
           git -C SDL_ttf submodule status --recursive
 
       - name: Configure SDL2
@@ -296,6 +306,50 @@ jobs:
             --parallel 2 \
             --verbose
 
+      - name: Configure SDL2_net
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          SDL2_CONFIG="$(
+            find "${GITHUB_WORKSPACE}/sdl-prefix" \
+              -type f \
+              -name SDL2Config.cmake \
+              -print \
+              -quit
+          )"
+
+          test -n "${SDL2_CONFIG}"
+
+          SDL2_CONFIG_DIR="$(dirname "${SDL2_CONFIG}")"
+
+          cmake \
+            -S SDL_net \
+            -B build-net \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/sdl-prefix" \
+            -DSDL2_DIR="${SDL2_CONFIG_DIR}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSDL2NET_SAMPLES=OFF \
+            -DSDL2NET_INSTALL=OFF
+
+      - name: Build SDL2_net
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake \
+            --build build-net \
+            --parallel 2 \
+            --verbose
+
       - name: Assemble staged kit
         shell: bash
         run: |
@@ -333,10 +387,19 @@ jobs:
               -quit
           )"
 
+          NET_LIBRARY="$(
+            find build-net \
+              -type f \
+              -name libSDL2_net.so \
+              -print \
+              -quit
+          )"
+
           test -n "${SDL_LIBRARY}"
           test -n "${TTF_LIBRARY}"
           test -n "${MIXER_LIBRARY}"
           test -n "${IMAGE_LIBRARY}"
+          test -n "${NET_LIBRARY}"
 
           STAGE="dist/${OUTPUT_NAME}"
 
@@ -365,6 +428,10 @@ jobs:
             "${IMAGE_LIBRARY}" \
             "${STAGE}/lib/${ANDROID_ABI}/libSDL2_image.so"
 
+          cp \
+            "${NET_LIBRARY}" \
+            "${STAGE}/lib/${ANDROID_ABI}/libSDL2_net.so"
+
           cp SDL/include/*.h \
             "${STAGE}/include/SDL2/"
 
@@ -375,6 +442,9 @@ jobs:
             "${STAGE}/include/SDL2/"
 
           cp SDL_image/include/SDL_image.h \
+            "${STAGE}/include/SDL2/"
+
+          cp SDL_net/include/SDL_net.h \
             "${STAGE}/include/SDL2/"
 
           cp -R \
@@ -398,6 +468,9 @@ jobs:
 
           cp SDL_image/LICENSE.txt \
             "${STAGE}/licenses/SDL2_image-LICENSE.txt"
+
+          cp SDL_net/LICENSE.txt \
+            "${STAGE}/licenses/SDL2_net-LICENSE.txt"
 
           cp tests/core-capability/main.cpp \
             "${STAGE}/tests/core-capability/main.cpp"
@@ -439,6 +512,12 @@ jobs:
             echo "IMAGE_PNG=ON"
             echo "IMAGE_QOI=ON"
             echo "IMAGE_OTHER_FORMATS=OFF"
+            echo "NET_VERSION=${NET_VERSION}"
+            echo "NET_REF=${NET_REF}"
+            echo "NET_COMMIT=$(git -C SDL_net rev-parse HEAD)"
+            echo "NET_TCP=ON"
+            echo "NET_UDP=ON"
+            echo "NET_IPV4=ON"
             echo "NDK_VERSION=${NDK_VERSION}"
             echo "ANDROID_ABI=${ANDROID_ABI}"
             echo "ANDROID_API=${ANDROID_API}"
@@ -473,6 +552,12 @@ jobs:
             echo "- built-in BMP and QOI loading"
             echo "- no external image codec shared libraries"
             echo "- other image formats disabled"
+            echo
+            echo "SDL2_net:"
+            echo "- portable IPv4 TCP client and server sockets"
+            echo "- portable IPv4 UDP sockets"
+            echo "- hostname resolution and socket polling"
+            echo "- no HTTP, TLS, WebSocket, or JSON layer"
           } > "${STAGE}/FEATURES.txt"
 
       - name: Verify staged libraries
@@ -487,7 +572,8 @@ jobs:
             "${LIB_DIR}/libSDL2.so" \
             "${LIB_DIR}/libSDL2_ttf.so" \
             "${LIB_DIR}/libSDL2_mixer.so" \
-            "${LIB_DIR}/libSDL2_image.so"
+            "${LIB_DIR}/libSDL2_image.so" \
+            "${LIB_DIR}/libSDL2_net.so"
           do
             test -f "${LIBRARY}"
 
@@ -549,10 +635,25 @@ jobs:
             'IMG_Load' \
             "${STAGE}/libSDL2_image-ELF-SYMBOLS.txt"
 
+          readelf -d "${LIB_DIR}/libSDL2_net.so" \
+            | grep -Fq 'Shared library: [libSDL2.so]'
+
+          readelf -Ws "${LIB_DIR}/libSDL2_net.so" \
+            | tee "${STAGE}/libSDL2_net-ELF-SYMBOLS.txt"
+
+          grep -Fq \
+            'SDLNet_TCP_OpenClient' \
+            "${STAGE}/libSDL2_net-ELF-SYMBOLS.txt"
+
+          grep -Fq \
+            'SDLNet_UDP_Open' \
+            "${STAGE}/libSDL2_net-ELF-SYMBOLS.txt"
+
           test -f "${STAGE}/include/SDL2/SDL.h"
           test -f "${STAGE}/include/SDL2/SDL_ttf.h"
           test -f "${STAGE}/include/SDL2/SDL_mixer.h"
           test -f "${STAGE}/include/SDL2/SDL_image.h"
+          test -f "${STAGE}/include/SDL2/SDL_net.h"
           test -f "${STAGE}/java/org/libsdl/app/SDLActivity.java"
           test -f "${STAGE}/tests/core-capability/main.cpp"
           test -f "${STAGE}/tests/ttf-capability/main.cpp"
