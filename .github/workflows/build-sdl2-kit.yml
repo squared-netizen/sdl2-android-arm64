@@ -410,7 +410,8 @@ jobs:
             "${STAGE}/licenses" \
             "${STAGE}/tests/core-capability" \
             "${STAGE}/tests/ttf-capability" \
-            "${STAGE}/tests/mixer-capability"
+            "${STAGE}/tests/mixer-capability" \
+            "${STAGE}/tests/net-capability"
 
           cp \
             "${SDL_LIBRARY}" \
@@ -480,6 +481,9 @@ jobs:
 
           cp -R tests/mixer-capability/. \
             "${STAGE}/tests/mixer-capability/"
+
+          cp -R tests/net-capability/. \
+            "${STAGE}/tests/net-capability/"
 
           {
             echo "SDL_VERSION=${SDL_VERSION}"
@@ -659,9 +663,19 @@ jobs:
           test -f "${STAGE}/tests/ttf-capability/main.cpp"
           test -f "${STAGE}/tests/mixer-capability/main.cpp"
           test -f "${STAGE}/tests/mixer-capability/SHA256SUMS.txt"
+          test -f "${STAGE}/tests/net-capability/main.cpp"
+          test -f "${STAGE}/tests/net-capability/AndroidManifest.xml"
+          test -f "${STAGE}/tests/net-capability/CMakeLists.txt"
+          test -f "${STAGE}/tests/net-capability/build-native.sh"
+          test -f "${STAGE}/tests/net-capability/SHA256SUMS.txt"
 
           (
             cd "${STAGE}/tests/mixer-capability"
+            sha256sum -c SHA256SUMS.txt
+          )
+
+          (
+            cd "${STAGE}/tests/net-capability"
             sha256sum -c SHA256SUMS.txt
           )
 
